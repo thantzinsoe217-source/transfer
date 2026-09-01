@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// အခြေခံ rule — Firebase Console > Firestore Database > Rules တွင် ဒီအတိုင်း ကူးထည့်နိုင်ပါတယ်။
+// "transfers" collection ကို app ကနေ ဖတ်/ရေး နိုင်ပါစေ (Firebase Authentication မထည့်သေးလျှင်).
+// အကြံပြုချက် - README.md ရဲ့ "Security" အပိုင်းကို ဖတ်ပြီး Login/Auth ထည့်ဖို့ စဉ်းစားပါ။
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /transfers/{document} {
+      allow read, write: if true;
+    }
+  }
+}
