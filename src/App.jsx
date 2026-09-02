@@ -13,8 +13,11 @@ import {
   ChevronDown,
   ChevronUp,
   Check,
+  Banknote,
+  ArrowLeftRight,
 } from "lucide-react";
 import { db } from "./firebase";
+import DailyCash from "./DailyCash";
 import {
   collection,
   addDoc,
@@ -201,6 +204,7 @@ export default function TransferPOS() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [toast, setToast] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [view, setView] = useState("transfer"); // "transfer" | "cash"
   const now = useClock();
 
   const addedTypeIds = useMemo(
@@ -285,6 +289,18 @@ export default function TransferPOS() {
 
   const canSave = items.length > 0 && totals.totalIn + totals.totalOut > 0 && !saving;
 
+  // Sum of today's already-saved transfers (from the live `history` state
+  // above), used by the Daily Cash screen to compute the running cash total.
+  const dayTotals = useMemo(() => {
+    let totalIn = 0;
+    let totalOut = 0;
+    for (const rec of history) {
+      totalIn += Number(rec.totalIn) || 0;
+      totalOut += Number(rec.totalOut) || 0;
+    }
+    return { totalIn, totalOut };
+  }, [history]);
+
   // ---------- Firebase: insert a new row into the "transfers" table ----------
   async function handleSave() {
     if (!canSave) return;
@@ -339,15 +355,38 @@ export default function TransferPOS() {
             <p className="text-blue-300 text-xs">POS Terminal</p>
           </div>
         </div>
-        <div className="text-right shrink-0">
-          <p className="font-semibold text-sm sm:text-base leading-tight">
-            {timeStr}
-          </p>
-          <p className="text-blue-300 text-xs">{dateStr}</p>
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-1 bg-blue-900/60 rounded-full p-1">
+            <button
+              onClick={() => setView("transfer")}
+              aria-label="Transfer"
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                view === "transfer" ? "bg-amber-500 text-blue-950" : "text-blue-300"
+              }`}
+            >
+              <ArrowLeftRight size={16} />
+            </button>
+            <button
+              onClick={() => setView("cash")}
+              aria-label="Daily Cash"
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                view === "cash" ? "bg-amber-500 text-blue-950" : "text-blue-300"
+              }`}
+            >
+              <Banknote size={16} />
+            </button>
+          </div>
+          <div className="text-right">
+            <p className="font-semibold text-sm sm:text-base leading-tight">
+              {timeStr}
+            </p>
+            <p className="text-blue-300 text-xs">{dateStr}</p>
+          </div>
         </div>
       </div>
 
       {/* Main Container */}
+      {view === "transfer" ? (
       <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-[260px_1fr] lg:grid-cols-[300px_1fr] overflow-hidden">
         {/* Payment Type Selection Area */}
         <div className="p-3.5 sm:p-4 bg-slate-100 md:bg-transparent border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0 md:shrink max-h-[40vh] md:max-h-none">
@@ -491,6 +530,9 @@ export default function TransferPOS() {
           </div>
         </div>
       </div>
+      ) : (
+        <DailyCash todayTotalIn={dayTotals.totalIn} todayTotalOut={dayTotals.totalOut} />
+      )}
 
       {/* Save Notification Toast */}
       {toast && (
