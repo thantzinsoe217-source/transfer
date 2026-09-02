@@ -18,7 +18,9 @@ function digitsOnly(raw) {
 // One editable column of tiers (either the "in"/transfer schedule or the
 // "out"/withdraw schedule). Each row = "starting from this amount, fee is
 // this much", e.g. 0 -> 300 Ks, 100,000 -> 500 Ks, 200,000 -> 1,000 Ks.
-function TierColumn({ title, tiers, onChange }) {
+// readOnly=true (staff account) ဆိုရင် input တွေကို disable လုပ်ပြီး
+// add/remove tier button တွေကို လုံးဝ ဖျောက်ထားတယ်.
+function TierColumn({ title, tiers, onChange, readOnly }) {
   function updateTier(id, field, raw) {
     const value = digitsOnly(raw);
     onChange(tiers.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
@@ -50,7 +52,10 @@ function TierColumn({ title, tiers, onChange }) {
                 inputMode="numeric"
                 value={t.threshold ? t.threshold.toLocaleString("en-US") : "0"}
                 onChange={(e) => updateTier(t.id, "threshold", e.target.value)}
-                className="w-full h-9 rounded-lg bg-white border border-slate-200 px-2 text-sm font-semibold text-blue-950 text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
+                disabled={readOnly}
+                className={`w-full h-9 rounded-lg bg-white border border-slate-200 px-2 text-sm font-semibold text-blue-950 text-right focus:outline-none focus:ring-2 focus:ring-blue-400 ${
+                  readOnly ? "opacity-60 cursor-not-allowed" : ""
+                }`}
               />
             </div>
             <div className="flex-1 min-w-0">
@@ -62,25 +67,32 @@ function TierColumn({ title, tiers, onChange }) {
                 inputMode="numeric"
                 value={t.fee ? t.fee.toLocaleString("en-US") : "0"}
                 onChange={(e) => updateTier(t.id, "fee", e.target.value)}
-                className="w-full h-9 rounded-lg bg-white border border-slate-200 px-2 text-sm font-semibold text-blue-950 text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
+                disabled={readOnly}
+                className={`w-full h-9 rounded-lg bg-white border border-slate-200 px-2 text-sm font-semibold text-blue-950 text-right focus:outline-none focus:ring-2 focus:ring-blue-400 ${
+                  readOnly ? "opacity-60 cursor-not-allowed" : ""
+                }`}
               />
             </div>
-            <button
-              onClick={() => removeTier(t.id)}
-              aria-label="ဖျက်မည်"
-              className="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg bg-red-50 text-red-500 active:scale-90 transition-transform"
-            >
-              <Trash2 size={14} />
-            </button>
+            {!readOnly && (
+              <button
+                onClick={() => removeTier(t.id)}
+                aria-label="ဖျက်မည်"
+                className="w-9 h-9 shrink-0 flex items-center justify-center rounded-lg bg-red-50 text-red-500 active:scale-90 transition-transform"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </div>
         ))}
       </div>
-      <button
-        onClick={addTier}
-        className="w-full h-9 rounded-lg border-2 border-dashed border-slate-200 text-slate-400 text-xs font-semibold flex items-center justify-center gap-1 active:scale-[0.98] transition-transform"
-      >
-        <Plus size={14} /> Tier ထပ်တိုးရန်
-      </button>
+      {!readOnly && (
+        <button
+          onClick={addTier}
+          className="w-full h-9 rounded-lg border-2 border-dashed border-slate-200 text-slate-400 text-xs font-semibold flex items-center justify-center gap-1 active:scale-[0.98] transition-transform"
+        >
+          <Plus size={14} /> Tier ထပ်တိုးရန်
+        </button>
+      )}
     </div>
   );
 }
@@ -88,12 +100,16 @@ function TierColumn({ title, tiers, onChange }) {
 // Big bottom sheet — opened from the account dropdown in App.jsx. Lets the
 // shop owner define separate tiered fee schedules for ငွေသွင်း (in) and
 // ငွေထုတ် (out), saved to Firestore so every device shares the same setting.
-export default function FeeSettingsPanel({ feeTiers, onClose }) {
+//
+// readOnly prop: App.jsx က isOwner မဟုတ်ရင် (staff) readOnly={true} ပို့တယ်.
+// readOnly ဆိုရင် ကြည့်ရုံပဲ ရပြီး၊ edit/save လုပ်လို့ မရအောင် ပိတ်ထားတယ်.
+export default function FeeSettingsPanel({ feeTiers, onClose, readOnly = false }) {
   const [inTiers, setInTiers] = useState(feeTiers.in);
   const [outTiers, setOutTiers] = useState(feeTiers.out);
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
+    if (readOnly) return;
     setSaving(true);
     try {
       const sortByThreshold = (arr) =>
@@ -126,7 +142,9 @@ export default function FeeSettingsPanel({ feeTiers, onClose }) {
               Fee Calculate Setting
             </p>
             <p className="text-slate-400 text-xs">
-              ပမာဏအလိုက် ငွေသွင်း/ငွေထုတ် fee သတ်မှတ်ပါ
+              {readOnly
+                ? "ကြည့်ရှုရုံသာ ရပါသည် (View only)"
+                : "ပမာဏအလိုက် ငွေသွင်း/ငွေထုတ် fee သတ်မှတ်ပါ"}
             </p>
           </div>
           <button
@@ -144,25 +162,35 @@ export default function FeeSettingsPanel({ feeTiers, onClose }) {
               title="ငွေသွင်း (Transfer) Fee"
               tiers={inTiers}
               onChange={setInTiers}
+              readOnly={readOnly}
             />
             <TierColumn
               title="ငွေထုတ် (Withdraw) Fee"
               tiers={outTiers}
               onChange={setOutTiers}
+              readOnly={readOnly}
             />
           </div>
         </div>
 
-        <div className="p-4 sm:p-5 border-t border-slate-100 shrink-0">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full h-12 sm:h-14 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 font-bold text-base sm:text-lg bg-amber-500 text-blue-950 active:scale-[0.98] shadow-md hover:bg-amber-400 disabled:opacity-50"
-          >
-            <Save size={18} />
-            Save
-          </button>
-        </div>
+        {readOnly ? (
+          <div className="p-4 sm:p-5 border-t border-slate-100 shrink-0">
+            <p className="text-center text-slate-400 text-xs sm:text-sm font-medium">
+              ကြည့်ရှုရုံသာ ရပါသည် — ပြင်ဆင်ရန် ဆိုင်ရှင် Login လိုအပ်ပါသည်
+            </p>
+          </div>
+        ) : (
+          <div className="p-4 sm:p-5 border-t border-slate-100 shrink-0">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="w-full h-12 sm:h-14 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 font-bold text-base sm:text-lg bg-amber-500 text-blue-950 active:scale-[0.98] shadow-md hover:bg-amber-400 disabled:opacity-50"
+            >
+              <Save size={18} />
+              Save
+            </button>
+          </div>
+        )}
       </div>
     </>
   );

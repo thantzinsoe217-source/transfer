@@ -18,11 +18,13 @@ import {
   LayoutDashboard,
   Settings,
   Sliders,
+  LogOut,
 } from "lucide-react";
 import { db } from "./firebase";
 import DailyCash from "./DailyCash";
 import Dashboard from "./Dashboard";
 import FeeSettingsPanel from "./FeeSettingsPanel";
+import { AuthProvider, useAuth, Login } from "./Auth";
 import {
   collection,
   addDoc,
@@ -260,7 +262,8 @@ function LineItem({ item, fee, onAmountChange, onDirectionChange, onRemove }) {
   );
 }
 
-export default function TransferPOS() {
+function TransferPOS() {
+  const { isOwner, logout } = useAuth();
   const [items, setItems] = useState([]);
   const [history, setHistory] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -271,6 +274,12 @@ export default function TransferPOS() {
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [feeSettingsOpen, setFeeSettingsOpen] = useState(false);
   const now = useClock();
+
+  // Staff account က Dashboard tab ကို URL/state manipulation နဲ့ ရောက်မသွား
+  // အောင် guard ထားတယ် — tab bar ကနေ ဖျောက်ထားရုံနဲ့ မလုံလောက်လို့ပါ.
+  useEffect(() => {
+    if (!isOwner && view === "dashboard") setView("transfer");
+  }, [isOwner, view]);
 
   const addedTypeIds = useMemo(
     () => new Set(items.map((it) => it.typeId)),
@@ -463,7 +472,7 @@ export default function TransferPOS() {
         <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           {/* Account / settings entry point — opens a dropdown pinned to the
               top-right corner (see below), which leads to the Fee Calculate
-              setting sheet. */}
+              setting sheet and Logout. */}
           <button
             onClick={() => setAccountMenuOpen((v) => !v)}
             aria-label="Account setting"
@@ -498,13 +507,24 @@ export default function TransferPOS() {
               <Sliders size={16} />
               Setting (Fee Calculate)
             </button>
+            <button
+              onClick={() => {
+                setAccountMenuOpen(false);
+                logout();
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-red-600 font-semibold text-sm hover:bg-red-50 active:scale-[0.98] transition-all"
+            >
+              <LogOut size={16} />
+              Logout
+            </button>
           </div>
         </>
       )}
 
-      {/* Tab bar: Transfer / Daily Cash / Dashboard, below the header */}
+      {/* Tab bar: Transfer / Daily Cash / Dashboard, below the header.
+          Dashboard tab ကို ဆိုင်ရှင် (owner) မှလွဲပြီး ဖျောက်ထားတယ်. */}
       <div className="bg-blue-950 px-3.5 sm:px-6 pb-3 pt-0.5 flex gap-2 sm:gap-2.5 shrink-0">
-        {TABS.map((tab) => {
+        {TABS.filter((tab) => isOwner || tab.id !== "dashboard").map((tab) => {
           const Icon = tab.icon;
           const active = view === tab.id;
           return (
@@ -690,11 +710,12 @@ export default function TransferPOS() {
         />
       )}
 
-      {/* Fee Calculate setting sheet */}
+      {/* Fee Calculate setting sheet — staff (non-owner) ကို view-only ပေးထားတယ် */}
       {feeSettingsOpen && (
         <FeeSettingsPanel
           feeTiers={feeTiers}
           onClose={() => setFeeSettingsOpen(false)}
+          readOnly={!isOwner}
         />
       )}
 
@@ -706,5 +727,20 @@ export default function TransferPOS() {
         </div>
       )}
     </div>
+  );
+}
+
+// Login မလုပ်ရသေးရင် Login screen ပြသည်; login ဝင်ပြီးမှ POS ကို ဖော်ပြသည်.
+function AuthGate() {
+  const { role } = useAuth();
+  if (!role) return <Login />;
+  return <TransferPOS />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }
