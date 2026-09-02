@@ -4,11 +4,10 @@ import { Wallet, Lock } from "lucide-react";
 const AuthContext = createContext(null);
 const STORAGE_KEY = "pos_auth_role";
 
-// .env ထဲက VITE_OWNER_PASSWORD / VITE_STAFF_PASSWORD ကို ဖတ်တယ်
-// (Vercel deploy ဆိုရင် Vercel Project Settings > Environment Variables
-// ထဲမှာလည်း ဒီ 2 ခုကို ထည့်ပေးဖို့ လိုပါတယ်)
-const OWNER_PASSWORD = import.meta.env.VITE_OWNER_PASSWORD;
-const STAFF_PASSWORD = import.meta.env.VITE_STAFF_PASSWORD;
+// Password ကို ဒီနေရာမှာ တိုက်ရိုက် ပြောင်းလို့ရပါတယ်.
+// ပြောင်းပြီးရင် save လုပ်ပြီး git push / vercel --prod ထပ်တင်ရုံပါပဲ.
+const OWNER_PASSWORD = "owner1234";
+const STAFF_PASSWORD = "staff1234";
 
 export function AuthProvider({ children }) {
   const [role, setRole] = useState(
@@ -16,12 +15,12 @@ export function AuthProvider({ children }) {
   );
 
   function login(password) {
-    if (OWNER_PASSWORD && password === OWNER_PASSWORD) {
+    if (password === OWNER_PASSWORD) {
       localStorage.setItem(STORAGE_KEY, "owner");
       setRole("owner");
       return true;
     }
-    if (STAFF_PASSWORD && password === STAFF_PASSWORD) {
+    if (password === STAFF_PASSWORD) {
       localStorage.setItem(STORAGE_KEY, "staff");
       setRole("staff");
       return true;
