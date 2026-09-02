@@ -26,10 +26,16 @@ function todayDocId() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// todayTotalIn / todayTotalOut are passed in from App.jsx, which already
-// keeps a live Firestore subscription for today's "transfers" — Daily Cash
-// re-uses that instead of subscribing twice.
-export default function DailyCash({ todayTotalIn, todayTotalOut }) {
+// todayTotalIn / todayTotalOut / todayTotalFee are passed in from App.jsx,
+// which already keeps a live Firestore subscription for today's "transfers"
+// — Daily Cash re-uses that instead of subscribing twice. Fee is included
+// in the expected-cash math below because it is real cash the shop keeps
+// from the customer regardless of transfer direction.
+export default function DailyCash({
+  todayTotalIn,
+  todayTotalOut,
+  todayTotalFee = 0,
+}) {
   const [session, setSession] = useState(undefined); // undefined = still loading
   const [openInput, setOpenInput] = useState("");
   const [closeInput, setCloseInput] = useState("");
@@ -53,7 +59,10 @@ export default function DailyCash({ todayTotalIn, todayTotalOut }) {
   const isClosed = isOpen && !!session.closedAt;
   const openingAmount = Number(session?.openingAmount) || 0;
   const expectedNow =
-    openingAmount + (Number(todayTotalIn) || 0) - (Number(todayTotalOut) || 0);
+    openingAmount +
+    (Number(todayTotalIn) || 0) -
+    (Number(todayTotalOut) || 0) +
+    (Number(todayTotalFee) || 0);
 
   async function handleOpenDay() {
     const amount = digitsOnly(openInput);
@@ -174,6 +183,12 @@ export default function DailyCash({ todayTotalIn, todayTotalOut }) {
               <span className="text-slate-500">ယနေ့ ငွေထုတ်</span>
               <span className="font-semibold text-orange-600">
                 -{formatKs(todayTotalOut)}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-500">ယနေ့ Fee ကောက်ခံငွေ</span>
+              <span className="font-semibold text-amber-600">
+                +{formatKs(todayTotalFee)}
               </span>
             </div>
             <div className="flex justify-between items-center pt-2 mt-1 border-t border-slate-100">

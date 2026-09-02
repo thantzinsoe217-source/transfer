@@ -15,9 +15,14 @@ import {
   Check,
   Banknote,
   ArrowLeftRight,
+  LayoutDashboard,
+  Settings,
+  Sliders,
 } from "lucide-react";
 import { db } from "./firebase";
 import DailyCash from "./DailyCash";
+import Dashboard from "./Dashboard";
+import FeeSettingsPanel from "./FeeSettingsPanel";
 import {
   collection,
   addDoc,
@@ -27,6 +32,7 @@ import {
   orderBy,
   serverTimestamp,
   Timestamp,
+  doc,
 } from "firebase/firestore";
 
 // ---------- Sample payment type data ----------
@@ -74,6 +80,36 @@ const typeById = Object.fromEntries(PAYMENT_TYPES.map((t) => [t.id, t]));
 // Firestore collection that holds every saved transfer record ("row").
 const TRANSFERS_COLLECTION = "transfers";
 
+// Firestore doc that holds the shop's Fee Calculate setting. One shared
+// doc (not per-day), so collection = "settings", doc id = "feeConfig".
+const FEE_SETTINGS_COLLECTION = "settings";
+const FEE_SETTINGS_DOC_ID = "feeConfig";
+
+// Tabs shown in the bar under the header.
+const TABS = [
+  { id: "transfer", label: "Transfer", icon: ArrowLeftRight },
+  { id: "cash", label: "Daily Cash", icon: Banknote },
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+];
+
+// Default fee tiers — used until the shop owner saves their own values from
+// the Fee Calculate setting panel. A tier's fee applies to every amount
+// >= its threshold, up to (but not including) the next tier's threshold.
+// "in" = ငွေသွင်း / transfer, "out" = ငွေထုတ် / withdraw — each has its own
+// schedule since the two usually cost different amounts.
+const DEFAULT_FEE_TIERS = {
+  in: [
+    { id: "in-0", threshold: 0, fee: 300 },
+    { id: "in-1", threshold: 100000, fee: 500 },
+    { id: "in-2", threshold: 200000, fee: 1000 },
+  ],
+  out: [
+    { id: "out-0", threshold: 0, fee: 500 },
+    { id: "out-1", threshold: 100000, fee: 1000 },
+    { id: "out-2", threshold: 200000, fee: 2000 },
+  ],
+};
+
 function formatKs(n) {
   const num = Number(n) || 0;
   return num.toLocaleString("en-US") + " Ks";
@@ -90,6 +126,21 @@ function useClock() {
     return () => clearInterval(t);
   }, []);
   return now;
+}
+
+// Picks the fee for `amount` in the given direction ("in" | "out") by
+// finding the highest tier threshold that is <= amount.
+function calcFee(amount, direction, feeTiers) {
+  const tiers = feeTiers?.[direction];
+  const value = Number(amount) || 0;
+  if (!tiers || !tiers.length || value <= 0) return 0;
+  const sorted = [...tiers].sort((a, b) => a.threshold - b.threshold);
+  let fee = 0;
+  for (const tier of sorted) {
+    if (value >= tier.threshold) fee = tier.fee;
+    else break;
+  }
+  return fee;
 }
 
 function TypeChip({ type, size = 40 }) {
@@ -135,7 +186,7 @@ function PaymentTile({ type, added, onAdd }) {
   );
 }
 
-function LineItem({ item, onAmountChange, onDirectionChange, onRemove }) {
+function LineItem({ item, fee, onAmountChange, onDirectionChange, onRemove }) {
   const type = typeById[item.typeId];
   const isIn = item.direction === "in";
   const isOut = item.direction === "out";
@@ -194,6 +245,17 @@ function LineItem({ item, onAmountChange, onDirectionChange, onRemove }) {
           ငွေထုတ်
         </button>
       </div>
+
+      {/* Auto-calculated fee for this line, from the Fee Calculate setting
+          (separate tier schedules for ငွေသွင်း / ငွေထုတ်). Display only. */}
+      <div className="flex items-center justify-between px-1 pt-0.5">
+        <span className="text-xs sm:text-sm text-slate-400 font-medium">
+          Fee (auto)
+        </span>
+        <span className="text-sm sm:text-base font-bold text-amber-600">
+          {formatKs(fee)}
+        </span>
+      </div>
     </div>
   );
 }
@@ -204,7 +266,10 @@ export default function TransferPOS() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [toast, setToast] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [view, setView] = useState("transfer"); // "transfer" | "cash"
+  const [view, setView] = useState("transfer"); // "transfer" | "cash" | "dashboard"
+  const [feeTiers, setFeeTiers] = useState(DEFAULT_FEE_TIERS);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [feeSettingsOpen, setFeeSettingsOpen] = useState(false);
   const now = useClock();
 
   const addedTypeIds = useMemo(
@@ -238,6 +303,7 @@ export default function TransferPOS() {
             items: data.items || [],
             totalIn: data.totalIn || 0,
             totalOut: data.totalOut || 0,
+            totalFee: data.totalFee || 0,
             net: data.net || 0,
           };
         });
@@ -248,6 +314,32 @@ export default function TransferPOS() {
       }
     );
 
+    return () => unsubscribe();
+  }, []);
+
+  // ---------- Firebase: live-subscribe to the saved Fee Calculate setting ----------
+  // Shared across every device using this Firebase project. Falls back to
+  // DEFAULT_FEE_TIERS until a shop owner saves their own values from the
+  // settings panel for the first time.
+  useEffect(() => {
+    const ref = doc(db, FEE_SETTINGS_COLLECTION, FEE_SETTINGS_DOC_ID);
+    const unsubscribe = onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setFeeTiers({
+            in: data.inTiers?.length ? data.inTiers : DEFAULT_FEE_TIERS.in,
+            out: data.outTiers?.length ? data.outTiers : DEFAULT_FEE_TIERS.out,
+          });
+        } else {
+          setFeeTiers(DEFAULT_FEE_TIERS);
+        }
+      },
+      (err) => {
+        console.error("Fee settings subscription failed:", err);
+      }
+    );
     return () => unsubscribe();
   }, []);
 
@@ -280,25 +372,33 @@ export default function TransferPOS() {
   const totals = useMemo(() => {
     let totalIn = 0;
     let totalOut = 0;
+    let totalFee = 0;
     for (const it of items) {
-      if (it.direction === "in") totalIn += Number(it.amount) || 0;
-      else totalOut += Number(it.amount) || 0;
+      const amt = Number(it.amount) || 0;
+      totalFee += calcFee(amt, it.direction, feeTiers);
+      if (it.direction === "in") totalIn += amt;
+      else totalOut += amt;
     }
-    return { totalIn, totalOut, net: totalIn - totalOut };
-  }, [items]);
+    // Fee is real cash the shop keeps regardless of direction, so it adds
+    // to the net total (kept consistent with the Daily Cash "expected"
+    // calculation in DailyCash.jsx).
+    return { totalIn, totalOut, totalFee, net: totalIn - totalOut + totalFee };
+  }, [items, feeTiers]);
 
   const canSave = items.length > 0 && totals.totalIn + totals.totalOut > 0 && !saving;
 
   // Sum of today's already-saved transfers (from the live `history` state
-  // above), used by the Daily Cash screen to compute the running cash total.
+  // above), used by Daily Cash and Dashboard.
   const dayTotals = useMemo(() => {
     let totalIn = 0;
     let totalOut = 0;
+    let totalFee = 0;
     for (const rec of history) {
       totalIn += Number(rec.totalIn) || 0;
       totalOut += Number(rec.totalOut) || 0;
+      totalFee += Number(rec.totalFee) || 0;
     }
-    return { totalIn, totalOut };
+    return { totalIn, totalOut, totalFee };
   }, [history]);
 
   // ---------- Firebase: insert a new row into the "transfers" table ----------
@@ -307,14 +407,19 @@ export default function TransferPOS() {
     setSaving(true);
     try {
       await addDoc(collection(db, TRANSFERS_COLLECTION), {
-        items: items.map((it) => ({
-          typeId: it.typeId,
-          typeName: typeById[it.typeId].name,
-          amount: it.amount,
-          direction: it.direction,
-        })),
+        items: items.map((it) => {
+          const amt = Number(it.amount) || 0;
+          return {
+            typeId: it.typeId,
+            typeName: typeById[it.typeId].name,
+            amount: amt,
+            direction: it.direction,
+            fee: calcFee(amt, it.direction, feeTiers),
+          };
+        }),
         totalIn: totals.totalIn,
         totalOut: totals.totalOut,
+        totalFee: totals.totalFee,
         net: totals.net,
         createdAt: serverTimestamp(),
       });
@@ -355,27 +460,17 @@ export default function TransferPOS() {
             <p className="text-blue-300 text-xs">POS Terminal</p>
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="flex items-center gap-1 bg-blue-900/60 rounded-full p-1">
-            <button
-              onClick={() => setView("transfer")}
-              aria-label="Transfer"
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
-                view === "transfer" ? "bg-amber-500 text-blue-950" : "text-blue-300"
-              }`}
-            >
-              <ArrowLeftRight size={16} />
-            </button>
-            <button
-              onClick={() => setView("cash")}
-              aria-label="Daily Cash"
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
-                view === "cash" ? "bg-amber-500 text-blue-950" : "text-blue-300"
-              }`}
-            >
-              <Banknote size={16} />
-            </button>
-          </div>
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          {/* Account / settings entry point — opens a dropdown pinned to the
+              top-right corner (see below), which leads to the Fee Calculate
+              setting sheet. */}
+          <button
+            onClick={() => setAccountMenuOpen((v) => !v)}
+            aria-label="Account setting"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white text-blue-950 flex items-center justify-center shadow-sm active:scale-90 transition-transform shrink-0"
+          >
+            <Settings size={18} />
+          </button>
           <div className="text-right">
             <p className="font-semibold text-sm sm:text-base leading-tight">
               {timeStr}
@@ -385,153 +480,222 @@ export default function TransferPOS() {
         </div>
       </div>
 
+      {/* Account dropdown — pinned to the top-right corner of the screen */}
+      {accountMenuOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setAccountMenuOpen(false)}
+          />
+          <div className="fixed top-14 sm:top-16 right-3 sm:right-5 z-50 bg-white rounded-2xl shadow-xl border border-slate-100 p-1.5 w-52 sm:w-56">
+            <button
+              onClick={() => {
+                setFeeSettingsOpen(true);
+                setAccountMenuOpen(false);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-blue-950 font-semibold text-sm hover:bg-slate-50 active:scale-[0.98] transition-all"
+            >
+              <Sliders size={16} />
+              Setting (Fee Calculate)
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Tab bar: Transfer / Daily Cash / Dashboard, below the header */}
+      <div className="bg-blue-950 px-3.5 sm:px-6 pb-3 pt-0.5 flex gap-2 sm:gap-2.5 shrink-0">
+        {TABS.map((tab) => {
+          const Icon = tab.icon;
+          const active = view === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setView(tab.id)}
+              className={`flex-1 h-11 sm:h-12 rounded-xl flex items-center justify-center gap-1.5 sm:gap-2 font-semibold text-xs sm:text-sm transition-colors ${
+                active
+                  ? "bg-amber-500 text-blue-950"
+                  : "bg-blue-900/60 text-blue-200"
+              }`}
+            >
+              <Icon size={17} />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Main Container */}
       {view === "transfer" ? (
-      <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-[260px_1fr] lg:grid-cols-[300px_1fr] overflow-hidden">
-        {/* Payment Type Selection Area */}
-        <div className="p-3.5 sm:p-4 bg-slate-100 md:bg-transparent border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0 md:shrink max-h-[40vh] md:max-h-none">
-          <p className="text-slate-500 text-xs sm:text-sm font-semibold mb-2.5 px-1 uppercase tracking-wider">
-            Payment Type ရွေးပါ
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-1 gap-2.5 sm:gap-3">
-            {PAYMENT_TYPES.map((type) => (
-              <PaymentTile
-                key={type.id}
-                type={type}
-                added={addedTypeIds.has(type.id)}
-                onAdd={addItem}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Workspace Area (Transfer Box + Totals/Save) */}
-        <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
-          {/* Transfer Box & History Scrollable Area */}
-          <div className="flex-1 overflow-y-auto p-3.5 sm:p-5 space-y-4">
-            <p className="text-slate-500 text-xs sm:text-sm font-semibold px-1 uppercase tracking-wider">
-              Transfer Box
+        <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-[260px_1fr] lg:grid-cols-[300px_1fr] overflow-hidden">
+          {/* Payment Type Selection Area */}
+          <div className="p-3.5 sm:p-4 bg-slate-100 md:bg-transparent border-b md:border-b-0 md:border-r border-slate-200 overflow-y-auto shrink-0 md:shrink max-h-[40vh] md:max-h-none">
+            <p className="text-slate-500 text-xs sm:text-sm font-semibold mb-2.5 px-1 uppercase tracking-wider">
+              Payment Type ရွေးပါ
             </p>
-
-            {items.length === 0 ? (
-              <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 h-36 sm:h-48 flex items-center justify-center text-center p-6">
-                <p className="text-slate-400 text-sm sm:text-base max-w-xs">
-                  Payment Type တစ်ခုကို နှိပ်ပြီး Transfer စတင်ပါ
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
-                {items.map((item) => (
-                  <LineItem
-                    key={item.id}
-                    item={item}
-                    onAmountChange={updateAmount}
-                    onDirectionChange={updateDirection}
-                    onRemove={removeItem}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* History Section */}
-            {history.length > 0 && (
-              <div className="pt-2">
-                <button
-                  onClick={() => setHistoryOpen((v) => !v)}
-                  className="w-full flex items-center justify-between px-1 py-2 text-slate-500 hover:text-slate-700 transition-colors"
-                >
-                  <span className="text-xs sm:text-sm font-semibold flex items-center gap-2">
-                    <History size={16} />
-                    ယနေ့ မှတ်တမ်း ({history.length})
-                  </span>
-                  {historyOpen ? (
-                    <ChevronUp size={18} />
-                  ) : (
-                    <ChevronDown size={18} />
-                  )}
-                </button>
-
-                {historyOpen && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-2">
-                    {history.map((rec) => (
-                      <div
-                        key={rec.id}
-                        className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs text-slate-400 font-medium">
-                            {rec.time.toLocaleTimeString("en-US", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          <span className="text-sm font-bold text-blue-950">
-                            {formatKs(rec.net)}
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {rec.items.map((it, i) => (
-                            <span
-                              key={i}
-                              className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
-                                it.direction === "in"
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
-                                  : "bg-orange-50 text-orange-700 border border-orange-100"
-                              }`}
-                            >
-                              {it.typeName} {formatKs(it.amount)}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            <div className="grid grid-cols-2 md:grid-cols-1 gap-2.5 sm:gap-3">
+              {PAYMENT_TYPES.map((type) => (
+                <PaymentTile
+                  key={type.id}
+                  type={type}
+                  added={addedTypeIds.has(type.id)}
+                  onAdd={addItem}
+                />
+              ))}
+            </div>
           </div>
 
-          {/* Totals & Save Footer */}
-          <div className="bg-blue-950 text-white px-4 sm:px-6 pt-3.5 pb-4 sm:pb-5 shrink-0 border-t border-blue-900 shadow-lg">
-            <div className="max-w-4xl mx-auto space-y-1.5">
-              <div className="flex justify-between text-xs sm:text-sm">
-                <span className="text-blue-300">စုစုပေါင်း ငွေသွင်း</span>
-                <span className="font-semibold text-emerald-400">
-                  {formatKs(totals.totalIn)}
-                </span>
+          {/* Workspace Area (Transfer Box + Totals/Save) */}
+          <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
+            {/* Transfer Box & History Scrollable Area */}
+            <div className="flex-1 overflow-y-auto p-3.5 sm:p-5 space-y-4">
+              <p className="text-slate-500 text-xs sm:text-sm font-semibold px-1 uppercase tracking-wider">
+                Transfer Box
+              </p>
+
+              {items.length === 0 ? (
+                <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 h-36 sm:h-48 flex items-center justify-center text-center p-6">
+                  <p className="text-slate-400 text-sm sm:text-base max-w-xs">
+                    Payment Type တစ်ခုကို နှိပ်ပြီး Transfer စတင်ပါ
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {items.map((item) => (
+                    <LineItem
+                      key={item.id}
+                      item={item}
+                      fee={calcFee(item.amount, item.direction, feeTiers)}
+                      onAmountChange={updateAmount}
+                      onDirectionChange={updateDirection}
+                      onRemove={removeItem}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* History Section */}
+              {history.length > 0 && (
+                <div className="pt-2">
+                  <button
+                    onClick={() => setHistoryOpen((v) => !v)}
+                    className="w-full flex items-center justify-between px-1 py-2 text-slate-500 hover:text-slate-700 transition-colors"
+                  >
+                    <span className="text-xs sm:text-sm font-semibold flex items-center gap-2">
+                      <History size={16} />
+                      ယနေ့ မှတ်တမ်း ({history.length})
+                    </span>
+                    {historyOpen ? (
+                      <ChevronUp size={18} />
+                    ) : (
+                      <ChevronDown size={18} />
+                    )}
+                  </button>
+
+                  {historyOpen && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-2">
+                      {history.map((rec) => (
+                        <div
+                          key={rec.id}
+                          className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs text-slate-400 font-medium">
+                              {rec.time.toLocaleTimeString("en-US", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            <span className="text-sm font-bold text-blue-950">
+                              {formatKs(rec.net)}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {rec.items.map((it, i) => (
+                              <span
+                                key={i}
+                                className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                                  it.direction === "in"
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                                    : "bg-orange-50 text-orange-700 border border-orange-100"
+                                }`}
+                              >
+                                {it.typeName} {formatKs(it.amount)}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Totals & Save Footer */}
+            <div className="bg-blue-950 text-white px-4 sm:px-6 pt-3.5 pb-4 sm:pb-5 shrink-0 border-t border-blue-900 shadow-lg">
+              <div className="max-w-4xl mx-auto space-y-1.5">
+                <div className="flex justify-between text-xs sm:text-sm">
+                  <span className="text-blue-300">စုစုပေါင်း ငွေသွင်း</span>
+                  <span className="font-semibold text-emerald-400">
+                    {formatKs(totals.totalIn)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs sm:text-sm">
+                  <span className="text-blue-300">စုစုပေါင်း ငွေထုတ်</span>
+                  <span className="font-semibold text-orange-400">
+                    {formatKs(totals.totalOut)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs sm:text-sm">
+                  <span className="text-blue-300">စုစုပေါင်း Fee</span>
+                  <span className="font-semibold text-amber-400">
+                    {formatKs(totals.totalFee)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-2 mt-1 border-t border-blue-900">
+                  <span className="text-blue-100 font-medium text-sm sm:text-base">
+                    အသားတင် စုစုပေါင်း
+                  </span>
+                  <span className="text-xl sm:text-2xl font-bold text-amber-400">
+                    {formatKs(totals.net)}
+                  </span>
+                </div>
+                <button
+                  onClick={handleSave}
+                  disabled={!canSave}
+                  className={`w-full h-12 sm:h-14 mt-2 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 font-bold text-base sm:text-lg transition-all ${
+                    canSave
+                      ? "bg-amber-500 text-blue-950 active:scale-[0.98] shadow-md hover:bg-amber-400"
+                      : "bg-blue-900 text-blue-500 cursor-not-allowed"
+                  }`}
+                >
+                  <Save className="w-5 h-5 sm:w-6 sm:h-6" />
+                  Save
+                </button>
               </div>
-              <div className="flex justify-between text-xs sm:text-sm">
-                <span className="text-blue-300">စုစုပေါင်း ငွေထုတ်</span>
-                <span className="font-semibold text-orange-400">
-                  {formatKs(totals.totalOut)}
-                </span>
-              </div>
-              <div className="flex justify-between items-center pt-2 mt-1 border-t border-blue-900">
-                <span className="text-blue-100 font-medium text-sm sm:text-base">
-                  အသားတင် စုစုပေါင်း
-                </span>
-                <span className="text-xl sm:text-2xl font-bold text-amber-400">
-                  {formatKs(totals.net)}
-                </span>
-              </div>
-              <button
-                onClick={handleSave}
-                disabled={!canSave}
-                className={`w-full h-12 sm:h-14 mt-2 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 font-bold text-base sm:text-lg transition-all ${
-                  canSave
-                    ? "bg-amber-500 text-blue-950 active:scale-[0.98] shadow-md hover:bg-amber-400"
-                    : "bg-blue-900 text-blue-500 cursor-not-allowed"
-                }`}
-              >
-                <Save className="w-5 h-5 sm:w-6 sm:h-6" />
-                Save
-              </button>
             </div>
           </div>
         </div>
-      </div>
+      ) : view === "cash" ? (
+        <DailyCash
+          todayTotalIn={dayTotals.totalIn}
+          todayTotalOut={dayTotals.totalOut}
+          todayTotalFee={dayTotals.totalFee}
+        />
       ) : (
-        <DailyCash todayTotalIn={dayTotals.totalIn} todayTotalOut={dayTotals.totalOut} />
+        <Dashboard
+          totalIn={dayTotals.totalIn}
+          totalOut={dayTotals.totalOut}
+          totalFee={dayTotals.totalFee}
+        />
+      )}
+
+      {/* Fee Calculate setting sheet */}
+      {feeSettingsOpen && (
+        <FeeSettingsPanel
+          feeTiers={feeTiers}
+          onClose={() => setFeeSettingsOpen(false)}
+        />
       )}
 
       {/* Save Notification Toast */}
